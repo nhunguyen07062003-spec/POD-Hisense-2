@@ -1,0 +1,5 @@
+libzbar0
+poppler-utils
+tesseract-ocr
+tesseract-ocr-vie
+tesseract-ocr-eng
