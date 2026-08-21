@@ -5,6 +5,7 @@ import os
 import gc
 import re
 import io
+import zipfile
 import shutil
 import pytesseract
 import pandas as pd
@@ -30,8 +31,8 @@ st.sidebar.markdown("Vui lòng chọn tính năng cần dùng bên dưới:")
 option = st.sidebar.radio(
     "CHỌN CÔNG CỤ:",
     [
-        "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)",
-        "2. BSH_OCR & Tách PDF (Excel + Tải PDF)"
+        "1. Quét Mã Vạch & Tách PDF (Excel + ZIP)",
+        "2. BSH_OCR & Tách PDF (Excel + ZIP)"
     ]
 )  
 
@@ -42,12 +43,16 @@ if "current_option" not in st.session_state:
 if st.session_state.current_option != option:
     st.session_state.current_option = option
     st.session_state.excel_bytes = None
+    st.session_state.zip_bytes = None
     st.session_state.processed_option = None
     st.session_state.opt1_records = []
     st.session_state.opt2_records = []
 
 if "excel_bytes" not in st.session_state:
     st.session_state.excel_bytes = None
+
+if "zip_bytes" not in st.session_state:
+    st.session_state.zip_bytes = None
 
 if "processed_option" not in st.session_state:
     st.session_state.processed_option = None
@@ -72,28 +77,9 @@ def sanitize_filename(name):
     clean_name = clean_name.replace(' ', '_')
     return clean_name if clean_name else "FILE_UNNAMED"
 
-# --- HÀM TẠO ZIP TỪ THƯ MỤC PDF ---
-def create_zip_from_folder(folder_path, zip_filename):
+# --- HÀM TẠO EXCEL VÀ FILE ZIP TRONG BỘ NHỚ CHO OPTION 1 ---
+def generate_outputs_opt1(records):
     try:
-        memory_file = BytesIO()
-        shutil.make_archive(zip_filename.replace('.zip', ''), 'zip', folder_path)
-        zip_path = f"{zip_filename.replace('.zip', '')}.zip"
-        with open(zip_path, 'rb') as f_zip:
-            memory_file.write(f_zip.read())
-        memory_file.seek(0)
-        return memory_file.getvalue()
-    except Exception as e:
-        print(f"Lỗi tạo zip: {e}")
-        return None
-
-# --- HÀM TẠO EXCEL VÀ LƯU PDF RA THƯ MỤC CỤC BỘ CHO OPTION 1 ---
-def save_opt1_outputs(records):
-    try:
-        output_dir = "output_pdfs_opt1"
-        if os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
-
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Danh Sach POD"
@@ -105,6 +91,8 @@ def save_opt1_outputs(records):
             cell.alignment = openpyxl.styles.Alignment(horizontal='center')
 
         code_tracker = {}
+        pdf_files_data = []
+
         for idx, rec in enumerate(records, 1):
             row_num = idx + 1
             clean_c = sanitize_filename(rec['code'])
@@ -127,9 +115,7 @@ def save_opt1_outputs(records):
                 ws.cell(row=row_num, column=4).font = openpyxl.styles.Font(color="0000FF", bold=True)
 
             if rec.get("pdf_bytes") and len(rec["pdf_bytes"]) > 100:
-                file_path = os.path.join(output_dir, pdf_filename)
-                with open(file_path, "wb") as f_pdf:
-                    f_pdf.write(rec["pdf_bytes"])
+                pdf_files_data.append((pdf_filename, rec["pdf_bytes"]))
 
         ws.column_dimensions['A'].width = 10
         ws.column_dimensions['B'].width = 12
@@ -141,20 +127,22 @@ def save_opt1_outputs(records):
         wb.save(excel_buffer)
         excel_bytes = excel_buffer.getvalue()
 
+        # Đóng gói ZIP trong RAM cực kỳ an toàn
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for fname, fcontent in pdf_files_data:
+                zip_file.writestr(fname, fcontent)
+        zip_bytes = zip_buffer.getvalue()
+
         gc.collect()
-        return excel_bytes, output_dir
+        return excel_bytes, zip_bytes
     except Exception as e:
         print(f"Lỗi tạo output opt1: {e}")
         return None, None
 
-# --- HÀM TẠO EXCEL VÀ LƯU PDF RA THƯ MỤC CỤC BỘ CHO OPTION 2 ---
-def save_opt2_outputs(records):
+# --- HÀM TẠO EXCEL VÀ FILE ZIP TRONG BỘ NHỚ CHO OPTION 2 ---
+def generate_outputs_opt2(records):
     try:
-        output_dir = "output_pdfs_opt2"
-        if os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
-
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "DANH_SACH_TONG_HOP"
@@ -166,6 +154,8 @@ def save_opt2_outputs(records):
             cell.alignment = openpyxl.styles.Alignment(horizontal='center')
 
         code_tracker = {}
+        pdf_files_data = []
+
         for idx, rec in enumerate(records):
             row_num = idx + 2
             clean_code = sanitize_filename(rec["code"])
@@ -189,9 +179,7 @@ def save_opt2_outputs(records):
                 ws.cell(row=row_num, column=4).font = openpyxl.styles.Font(color="0000FF", bold=True)
 
             if rec.get("pdf_bytes") and len(rec["pdf_bytes"]) > 100:
-                file_path = os.path.join(output_dir, pdf_filename)
-                with open(file_path, "wb") as f_pdf:
-                    f_pdf.write(rec["pdf_bytes"])
+                pdf_files_data.append((pdf_filename, rec["pdf_bytes"]))
 
         ws.column_dimensions['A'].width = 10
         ws.column_dimensions['B'].width = 25
@@ -205,8 +193,14 @@ def save_opt2_outputs(records):
         wb.save(excel_buffer)
         excel_bytes = excel_buffer.getvalue()
 
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for fname, fcontent in pdf_files_data:
+                zip_file.writestr(fname, fcontent)
+        zip_bytes = zip_buffer.getvalue()
+
         gc.collect()
-        return excel_bytes, output_dir
+        return excel_bytes, zip_bytes
     except Exception as e:
         print(f"Lỗi tạo output opt2: {e}")
         return None, None
@@ -215,7 +209,7 @@ def save_opt2_outputs(records):
 # ==========================================================================================
 # OPTION 1: QUÉT MÃ VẠCH & TÁCH PDF TỰ ĐỘNG (DPI = 300)
 # ==========================================================================================
-if option == "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)":
+if option == "1. Quét Mã Vạch & Tách PDF (Excel + ZIP)":
     st.header("⚡ CÔNG CỤ QUÉT MÃ VẠCH & TÁCH PDF TỰ ĐỘNG (DPI 300)")
     
     uploaded_pdfs = st.file_uploader("Tải các file PDF cần tách lên đây:", type=["pdf"], accept_multiple_files=True, key="opt1_pdfs")
@@ -226,6 +220,7 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)":
         if st.button("🚀 BẮT ĐẦU XỬ LÝ", key="btn_start_opt1"):
             gc.collect()
             st.session_state.excel_bytes = None
+            st.session_state.zip_bytes = None
             st.session_state.opt1_records = []
             st.session_state.processed_option = None
             
@@ -323,16 +318,16 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)":
                         global_stt += 1
 
                 st.session_state.opt1_records = all_records
-                excel_bytes, folder_path = save_opt1_outputs(all_records)
+                excel_bytes, zip_bytes = generate_outputs_opt1(all_records)
                 
-                if excel_bytes:
+                if excel_bytes and zip_bytes:
                     st.session_state.excel_bytes = excel_bytes
-                    st.session_state.folder_path = folder_path
+                    st.session_state.zip_bytes = zip_bytes
                     st.session_state.processed_option = "opt1"
                     status_text.text("🎉 Hoàn thành xử lý!")
-                    st.success(f"🎉 Đã quét xong! Thư mục PDF trên server: `{folder_path}`.")
+                    st.success("🎉 Đã xử lý xong toàn bộ file!")
                 else:
-                    st.error("❌ Lỗi: Không thể tạo file Excel.")
+                    st.error("❌ Lỗi: Không thể tạo file kết quả.")
 
             except Exception as ex:
                 st.error(f"❌ Lỗi hệ thống: {str(ex)}")
@@ -382,10 +377,11 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)":
                     if rec["stt"] in changes_to_apply:
                         rec["code"] = changes_to_apply[rec["stt"]]
                         rec["status"] = "UPDATED"
-                new_excel, new_folder = save_opt1_outputs(st.session_state.opt1_records)
-                if new_excel:
+                new_excel, new_zip = generate_outputs_opt1(st.session_state.opt1_records)
+                if new_excel and new_zip:
                     st.session_state.excel_bytes = new_excel
-                    st.success("✅ Cập nhật dữ liệu và ghi lại file PDF thành công!")
+                    st.session_state.zip_bytes = new_zip
+                    st.success("✅ Cập nhật dữ liệu và tái tạo file thành công!")
                     st.rerun()
                 else:
                     st.error("❌ Lỗi cập nhật file.")
@@ -398,14 +394,13 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)":
         st.dataframe(df_preview, width='stretch', height=250)
 
         st.write("---")
-        st.subheader("📥 BƯỚC 4: TẢI KẾT QUẢ XUỐNG MÁY")
-        st.info(f"💡 Các file PDF tách rời đã được lưu tại thư mục server: **`{st.session_state.get('folder_path', 'output_pdfs_opt1')}/`**.")
+        st.subheader("📥 BƯỚC 4: TẢI FILE KẾT QUẢ")
         
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
             if st.session_state.excel_bytes:
                 st.download_button(
-                    label="📥 1. TẢI FILE EXCEL TỔNG HỢP", 
+                    label="📥 TẢI FILE EXCEL TỔNG HỢP", 
                     data=st.session_state.excel_bytes, 
                     file_name="DANH_SACH_POD.xlsx", 
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
@@ -413,22 +408,20 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)":
                     key="dl_excel_opt1"
                 )
         with col_dl2:
-            if st.session_state.get("folder_path"):
-                zip_data = create_zip_from_folder(st.session_state.folder_path, "output_pdfs_opt1.zip")
-                if zip_data:
-                    st.download_button(
-                        label="📦 2. TẢI TOÀN BỘ FILE PDF TÁCH RỜI (.ZIP)",
-                        data=zip_data,
-                        file_name="output_pdfs_opt1.zip",
-                        mime="application/zip",
-                        type="primary",
-                        key="dl_pdf_opt1"
-                    )
+            if st.session_state.zip_bytes:
+                st.download_button(
+                    label="📦 TẢI TOÀN BỘ FILE PDF (.ZIP)", 
+                    data=st.session_state.zip_bytes, 
+                    file_name="CATE_PDF_FILES.zip", 
+                    mime="application/zip", 
+                    type="primary", 
+                    key="dl_zip_opt1"
+                )
 
 # ==========================================================================================
 # OPTION 2: BSH_OCR & TÁCH PDF TỰ ĐỘNG (DPI = 300)
 # ==========================================================================================
-elif option == "2. BSH_OCR & Tách PDF (Excel + Tải PDF)":
+elif option == "2. BSH_OCR & Tách PDF (Excel + ZIP)":
     st.header("⚡ BSH - CÔNG CỤ OCR & TÁCH PDF TỰ ĐỘNG (DPI 300)")
     
     uploaded_files = st.file_uploader(
@@ -444,6 +437,7 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Tải PDF)":
         if st.button("🚀 BẮT ĐẦU XỬ LÝ", key="btn_start_opt2"):
             gc.collect()
             st.session_state.excel_bytes = None
+            st.session_state.zip_bytes = None
             st.session_state.opt2_records = []
             st.session_state.processed_option = None
             
@@ -562,13 +556,13 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Tải PDF)":
                         global_stt += 1
 
                 st.session_state.opt2_records = all_records
-                excel_bytes, folder_path = save_opt2_outputs(all_records)
+                excel_bytes, zip_bytes = generate_outputs_opt2(all_records)
                 st.session_state.excel_bytes = excel_bytes
-                st.session_state.folder_path = folder_path
+                st.session_state.zip_bytes = zip_bytes
                 st.session_state.processed_option = "opt2"
                 
                 status_text.text("🎉 Hoàn tất toàn bộ các file!")
-                st.success(f"🎉 Đã OCR thành công với DPI 300! Thư mục PDF trên server: `{folder_path}`.")
+                st.success("🎉 Đã OCR thành công!")
 
             except Exception as ex:
                 st.error(f"❌ Lỗi hệ thống: {str(ex)}")
@@ -633,9 +627,10 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Tải PDF)":
                         elif new_code.startswith("7620"):
                             rec["doc_type"] = "PHIEU_GIAO_HANG"
                 
-                new_excel, new_folder = save_opt2_outputs(st.session_state.opt2_records)
+                new_excel, new_zip = generate_outputs_opt2(st.session_state.opt2_records)
                 st.session_state.excel_bytes = new_excel
-                st.success("✅ Đã cập nhật dữ liệu BSH và ghi lại file thành công!")
+                st.session_state.zip_bytes = new_zip
+                st.success("✅ Đã cập nhật dữ liệu và tái tạo file thành công!")
                 st.rerun()
             else:
                 st.info("💡 Bạn chưa nhập mã mới nào.")
@@ -646,14 +641,13 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Tải PDF)":
         st.dataframe(df_preview, width='stretch', height=300)
 
         st.write("---")
-        st.subheader("📥 BƯỚC 4: TẢI KẾT QUẢ XUỐNG MÁY")
-        st.info(f"💡 Các file PDF tách rời đã được lưu tự động vào thư mục server: **`{st.session_state.get('folder_path', 'output_pdfs_opt2')}/`**.")
+        st.subheader("📥 BƯỚC 4: TẢI FILE KẾT QUẢ")
         
         col_dl1, col_dl2 = st.columns(2)
         with col_dl1:
             if st.session_state.excel_bytes:
                 st.download_button(
-                    label="📥 1. TẢI FILE EXCEL TỔNG HỢP BSH",
+                    label="📥 TẢI FILE EXCEL TỔNG HỢP BSH",
                     data=st.session_state.excel_bytes,
                     file_name="DANH_SACH_MA_BSH_TONG_HOP.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -661,14 +655,12 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Tải PDF)":
                     key="download_excel_opt2_final"
                 )
         with col_dl2:
-            if st.session_state.get("folder_path"):
-                zip_data = create_zip_from_folder(st.session_state.folder_path, "output_pdfs_opt2.zip")
-                if zip_data:
-                    st.download_button(
-                        label="📦 2. TẢI TOÀN BỘ FILE PDF TÁCH RỜI (.ZIP)",
-                        data=zip_data,
-                        file_name="output_pdfs_opt2.zip",
-                        mime="application/zip",
-                        type="primary",
-                        key="dl_pdf_opt2"
-                    )
+            if st.session_state.zip_bytes:
+                st.download_button(
+                    label="📦 TẢI TOÀN BỘ FILE PDF BSH (.ZIP)",
+                    data=st.session_state.zip_bytes,
+                    file_name="BSH_PDF_FILES.zip",
+                    mime="application/zip",
+                    type="primary",
+                    key="download_zip_opt2_final"
+                )
