@@ -5,6 +5,7 @@ import os
 import gc
 import re
 import io
+import shutil
 import pytesseract
 import pandas as pd
 from io import BytesIO
@@ -29,8 +30,8 @@ st.sidebar.markdown("Vui lòng chọn tính năng cần dùng bên dưới:")
 option = st.sidebar.radio(
     "CHỌN CÔNG CỤ:",
     [
-        "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)",
-        "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)"
+        "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)",
+        "2. BSH_OCR & Tách PDF (Excel + Tải PDF)"
     ]
 )  
 
@@ -71,10 +72,26 @@ def sanitize_filename(name):
     clean_name = clean_name.replace(' ', '_')
     return clean_name if clean_name else "FILE_UNNAMED"
 
+# --- HÀM TẠO ZIP TỪ THƯ MỤC PDF ---
+def create_zip_from_folder(folder_path, zip_filename):
+    try:
+        memory_file = BytesIO()
+        shutil.make_archive(zip_filename.replace('.zip', ''), 'zip', folder_path)
+        zip_path = f"{zip_filename.replace('.zip', '')}.zip"
+        with open(zip_path, 'rb') as f_zip:
+            memory_file.write(f_zip.read())
+        memory_file.seek(0)
+        return memory_file.getvalue()
+    except Exception as e:
+        print(f"Lỗi tạo zip: {e}")
+        return None
+
 # --- HÀM TẠO EXCEL VÀ LƯU PDF RA THƯ MỤC CỤC BỘ CHO OPTION 1 ---
 def save_opt1_outputs(records):
     try:
         output_dir = "output_pdfs_opt1"
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
         os.makedirs(output_dir, exist_ok=True)
 
         wb = openpyxl.Workbook()
@@ -134,6 +151,8 @@ def save_opt1_outputs(records):
 def save_opt2_outputs(records):
     try:
         output_dir = "output_pdfs_opt2"
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
         os.makedirs(output_dir, exist_ok=True)
 
         wb = openpyxl.Workbook()
@@ -196,7 +215,7 @@ def save_opt2_outputs(records):
 # ==========================================================================================
 # OPTION 1: QUÉT MÃ VẠCH & TÁCH PDF TỰ ĐỘNG (DPI = 300)
 # ==========================================================================================
-if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
+if option == "1. Quét Mã Vạch & Tách PDF (Excel + Tải PDF)":
     st.header("⚡ CÔNG CỤ QUÉT MÃ VẠCH & TÁCH PDF TỰ ĐỘNG (DPI 300)")
     
     uploaded_pdfs = st.file_uploader("Tải các file PDF cần tách lên đây:", type=["pdf"], accept_multiple_files=True, key="opt1_pdfs")
@@ -217,7 +236,6 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
                 page_idx, pdf_bytes_inner = args
                 page_num = page_idx + 1
                 try:
-                    # Nâng DPI lên 300 để quét mã vạch cực nét
                     page_images = convert_from_bytes(pdf_bytes_inner, dpi=300, first_page=page_num, last_page=page_num, thread_count=1)
                 except Exception:
                     page_images = []
@@ -271,7 +289,6 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
                     total_pages = len(pdf_reader.pages)
                     
                     tasks = [(i, pdf_bytes_input) for i in range(total_pages)]
-                    # Với DPI 300, giới hạn 1 worker để tiết kiệm RAM, chống lỗi quá tải
                     max_workers = 1
                     
                     page_results = [None] * total_pages
@@ -313,7 +330,7 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
                     st.session_state.folder_path = folder_path
                     st.session_state.processed_option = "opt1"
                     status_text.text("🎉 Hoàn thành xử lý!")
-                    st.success(f"🎉 Đã hoàn thành quét {total_files} file! Các file PDF đã được lưu vào thư mục: `{folder_path}` trên máy chủ.")
+                    st.success(f"🎉 Đã quét xong! Thư mục PDF trên server: `{folder_path}`.")
                 else:
                     st.error("❌ Lỗi: Không thể tạo file Excel.")
 
@@ -381,22 +398,37 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
         st.dataframe(df_preview, width='stretch', height=250)
 
         st.write("---")
-        st.subheader("📥 BƯỚC 4: TẢI FILE EXCEL KẾT QUẢ")
-        st.info(f"💡 Các file PDF tách rời đã được lưu trực tiếp vào thư mục **`{st.session_state.get('folder_path', 'output_pdfs_opt1')}/`** trên máy chủ của bạn.")
-        if st.session_state.excel_bytes:
-            st.download_button(
-                label="📥 TẢI FILE EXCEL TỔNG HỢP", 
-                data=st.session_state.excel_bytes, 
-                file_name="DANH_SACH_POD.xlsx", 
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
-                type="primary", 
-                key="dl_excel_opt1"
-            )
+        st.subheader("📥 BƯỚC 4: TẢI KẾT QUẢ XUỐNG MÁY")
+        st.info(f"💡 Các file PDF tách rời đã được lưu tại thư mục server: **`{st.session_state.get('folder_path', 'output_pdfs_opt1')}/`**.")
+        
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            if st.session_state.excel_bytes:
+                st.download_button(
+                    label="📥 1. TẢI FILE EXCEL TỔNG HỢP", 
+                    data=st.session_state.excel_bytes, 
+                    file_name="DANH_SACH_POD.xlsx", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                    type="primary", 
+                    key="dl_excel_opt1"
+                )
+        with col_dl2:
+            if st.session_state.get("folder_path"):
+                zip_data = create_zip_from_folder(st.session_state.folder_path, "output_pdfs_opt1.zip")
+                if zip_data:
+                    st.download_button(
+                        label="📦 2. TẢI TOÀN BỘ FILE PDF TÁCH RỜI (.ZIP)",
+                        data=zip_data,
+                        file_name="output_pdfs_opt1.zip",
+                        mime="application/zip",
+                        type="primary",
+                        key="dl_pdf_opt1"
+                    )
 
 # ==========================================================================================
 # OPTION 2: BSH_OCR & TÁCH PDF TỰ ĐỘNG (DPI = 300)
 # ==========================================================================================
-elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
+elif option == "2. BSH_OCR & Tách PDF (Excel + Tải PDF)":
     st.header("⚡ BSH - CÔNG CỤ OCR & TÁCH PDF TỰ ĐỘNG (DPI 300)")
     
     uploaded_files = st.file_uploader(
@@ -428,7 +460,6 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
                 full_text = ""
                 preview_img_bytes = None
 
-                # 1. Đọc văn bản trực tiếp từ PDF layer (nếu có)
                 try:
                     reader_page = pypdf.PdfReader(io.BytesIO(pdf_bytes_inner))
                     full_text = reader_page.pages[i].extract_text() or ""
@@ -447,7 +478,6 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
                 except Exception:
                     pass
 
-                # 2. Nếu chưa thấy mã từ text, chuyển sang ảnh với DPI = 300 để OCR cực nét
                 try:
                     page_images = convert_from_bytes(pdf_bytes_inner, dpi=300, first_page=page_num, last_page=page_num, thread_count=1)
                     if page_images:
@@ -458,7 +488,6 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
                         preview_img_bytes = img_byte_arr.getvalue()
 
                         if not final_code:
-                            # Tăng độ phân giải và chuyển sang grayscale để OCR nhạy hơn
                             gray_img = img.convert('L')
                             ocr_full = pytesseract.image_to_string(gray_img, lang='vie+eng', config='--psm 6')
                             
@@ -503,7 +532,7 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
                     total_pages = len(reader_temp.pages)
 
                     tasks = [(i, pdf_bytes) for i in range(total_pages)]
-                    max_workers = 1 # Đảm bảo ổn định bộ nhớ cho DPI 300
+                    max_workers = 1
 
                     page_results = [None] * total_pages
                     completed_count = 0
@@ -539,7 +568,7 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
                 st.session_state.processed_option = "opt2"
                 
                 status_text.text("🎉 Hoàn tất toàn bộ các file!")
-                st.success(f"🎉 Đã OCR thành công với DPI 300! Các file PDF được lưu tại thư mục: `{folder_path}`.")
+                st.success(f"🎉 Đã OCR thành công với DPI 300! Thư mục PDF trên server: `{folder_path}`.")
 
             except Exception as ex:
                 st.error(f"❌ Lỗi hệ thống: {str(ex)}")
@@ -617,14 +646,29 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
         st.dataframe(df_preview, width='stretch', height=300)
 
         st.write("---")
-        st.subheader("📥 BƯỚC 4: TẢI FILE EXCEL KẾT QUẢ")
-        st.info(f"💡 Các file PDF tách rời đã được lưu tự động vào thư mục **`{st.session_state.get('folder_path', 'output_pdfs_opt2')}/`** trên máy chủ.")
-        if st.session_state.excel_bytes:
-            st.download_button(
-                label="📥 TẢI FILE EXCEL TỔNG HỢP BSH",
-                data=st.session_state.excel_bytes,
-                file_name="DANH_SACH_MA_BSH_TONG_HOP.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                key="download_excel_opt2_final"
-            )
+        st.subheader("📥 BƯỚC 4: TẢI KẾT QUẢ XUỐNG MÁY")
+        st.info(f"💡 Các file PDF tách rời đã được lưu tự động vào thư mục server: **`{st.session_state.get('folder_path', 'output_pdfs_opt2')}/`**.")
+        
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            if st.session_state.excel_bytes:
+                st.download_button(
+                    label="📥 1. TẢI FILE EXCEL TỔNG HỢP BSH",
+                    data=st.session_state.excel_bytes,
+                    file_name="DANH_SACH_MA_BSH_TONG_HOP.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    key="download_excel_opt2_final"
+                )
+        with col_dl2:
+            if st.session_state.get("folder_path"):
+                zip_data = create_zip_from_folder(st.session_state.folder_path, "output_pdfs_opt2.zip")
+                if zip_data:
+                    st.download_button(
+                        label="📦 2. TẢI TOÀN BỘ FILE PDF TÁCH RỜI (.ZIP)",
+                        data=zip_data,
+                        file_name="output_pdfs_opt2.zip",
+                        mime="application/zip",
+                        type="primary",
+                        key="dl_pdf_opt2"
+                    )
