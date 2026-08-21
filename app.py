@@ -284,7 +284,7 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + ZIP)":
                     total_pages = len(pdf_reader.pages)
                     
                     tasks = [(i, pdf_bytes_input) for i in range(total_pages)]
-                    max_workers = 1
+                    max_workers = 2
                     
                     page_results = [None] * total_pages
                     completed_count = 0
@@ -526,7 +526,7 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + ZIP)":
                     total_pages = len(reader_temp.pages)
 
                     tasks = [(i, pdf_bytes) for i in range(total_pages)]
-                    max_workers = 1
+                    max_workers = 2
 
                     page_results = [None] * total_pages
                     completed_count = 0
