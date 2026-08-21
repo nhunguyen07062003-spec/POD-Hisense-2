@@ -92,7 +92,6 @@ def save_opt1_outputs(records):
             row_num = idx + 1
             clean_c = sanitize_filename(rec['code'])
             
-            # Xử lý trùng tên mã vạch
             code_tracker[clean_c] = code_tracker.get(clean_c, 0) + 1
             if code_tracker[clean_c] > 1:
                 pdf_filename = f"{clean_c}_p{code_tracker[clean_c]}.pdf"
@@ -110,7 +109,6 @@ def save_opt1_outputs(records):
             elif rec["status"] == "UPDATED":
                 ws.cell(row=row_num, column=4).font = openpyxl.styles.Font(color="0000FF", bold=True)
 
-            # Lưu file PDF riêng lẻ vào thư mục
             if rec.get("pdf_bytes") and len(rec["pdf_bytes"]) > 100:
                 file_path = os.path.join(output_dir, pdf_filename)
                 with open(file_path, "wb") as f_pdf:
@@ -196,10 +194,10 @@ def save_opt2_outputs(records):
 
 
 # ==========================================================================================
-# OPTION 1: QUÉT MÃ VẠCH & TÁCH PDF TỰ ĐỘNG
+# OPTION 1: QUÉT MÃ VẠCH & TÁCH PDF TỰ ĐỘNG (DPI = 300)
 # ==========================================================================================
 if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
-    st.header("⚡ CÔNG CỤ QUÉT MÃ VẠCH & TÁCH PDF TỰ ĐỘNG")
+    st.header("⚡ CÔNG CỤ QUÉT MÃ VẠCH & TÁCH PDF TỰ ĐỘNG (DPI 300)")
     
     uploaded_pdfs = st.file_uploader("Tải các file PDF cần tách lên đây:", type=["pdf"], accept_multiple_files=True, key="opt1_pdfs")
     
@@ -219,7 +217,8 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
                 page_idx, pdf_bytes_inner = args
                 page_num = page_idx + 1
                 try:
-                    page_images = convert_from_bytes(pdf_bytes_inner, dpi=150, first_page=page_num, last_page=page_num, thread_count=1)
+                    # Nâng DPI lên 300 để quét mã vạch cực nét
+                    page_images = convert_from_bytes(pdf_bytes_inner, dpi=300, first_page=page_num, last_page=page_num, thread_count=1)
                 except Exception:
                     page_images = []
                 
@@ -272,7 +271,8 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
                     total_pages = len(pdf_reader.pages)
                     
                     tasks = [(i, pdf_bytes_input) for i in range(total_pages)]
-                    max_workers = min(2, os.cpu_count() or 2)
+                    # Với DPI 300, giới hạn 1 worker để tiết kiệm RAM, chống lỗi quá tải
+                    max_workers = 1
                     
                     page_results = [None] * total_pages
                     completed_count = 0
@@ -394,10 +394,10 @@ if option == "1. Quét Mã Vạch & Tách PDF (Excel + Thư mục PDF)":
             )
 
 # ==========================================================================================
-# OPTION 2: BSH_OCR & TÁCH PDF TỰ ĐỘNG
+# OPTION 2: BSH_OCR & TÁCH PDF TỰ ĐỘNG (DPI = 300)
 # ==========================================================================================
 elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
-    st.header("⚡ BSH - CÔNG CỤ OCR & TÁCH PDF TỰ ĐỘNG")
+    st.header("⚡ BSH - CÔNG CỤ OCR & TÁCH PDF TỰ ĐỘNG (DPI 300)")
     
     uploaded_files = st.file_uploader(
         "Tải các file PDF cần tách lên đây (Có thể chọn nhiều file):", 
@@ -428,56 +428,48 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
                 full_text = ""
                 preview_img_bytes = None
 
+                # 1. Đọc văn bản trực tiếp từ PDF layer (nếu có)
                 try:
                     reader_page = pypdf.PdfReader(io.BytesIO(pdf_bytes_inner))
                     full_text = reader_page.pages[i].extract_text() or ""
                     flat_text = re.sub(r'\s+', ' ', full_text).strip()
                     if re.search(r'DANH\s*SÁCH\s*TRẢ\s*HÀNG|Return\s*Delivery', flat_text, re.IGNORECASE):
                         doc_type = "DANH_SACH_TRA_HANG"
+                    
+                    matches_p7 = re.findall(r'\b(7623\d{6})\b', flat_text)
+                    matches_p0 = re.findall(r'\b(7620\d{6})\b', flat_text)
+                    if matches_p7:
+                        final_code = matches_p7[0]
+                        doc_type = "DANH_SACH_TRA_HANG"
+                    elif matches_p0:
+                        final_code = matches_p0[0]
+                        doc_type = "PHIEU_GIAO_HANG"
                 except Exception:
                     pass
 
+                # 2. Nếu chưa thấy mã từ text, chuyển sang ảnh với DPI = 300 để OCR cực nét
                 try:
-                    if full_text:
-                        matches_p7 = re.findall(r'\b(7623\d{6})\b', flat_text)
-                        matches_p0 = re.findall(r'\b(7620\d{6})\b', flat_text)
-                        if matches_p7:
-                            final_code = matches_p7[0]
-                            doc_type = "DANH_SACH_TRA_HANG"
-                        elif matches_p0:
-                            final_code = matches_p0[0]
-                            doc_type = "PHIEU_GIAO_HANG"
-                except Exception:
-                    pass
-
-                try:
-                    page_images = convert_from_bytes(pdf_bytes_inner, dpi=150, first_page=page_num, last_page=page_num, thread_count=1)
+                    page_images = convert_from_bytes(pdf_bytes_inner, dpi=300, first_page=page_num, last_page=page_num, thread_count=1)
                     if page_images:
                         img = page_images[0]
-                        width, height = img.size
-
+                        
                         img_byte_arr = BytesIO()
                         img.save(img_byte_arr, format='PNG')
                         preview_img_bytes = img_byte_arr.getvalue()
 
                         if not final_code:
-                            box_roi = (int(width * 0.40), int(height * 0.03), width, int(height * 0.18))
-                            crop_img = img.crop(box_roi).convert('L')
-                            crop_binary = crop_img.point(lambda p: 255 if p > 160 else 0)
-                            ocr_text = pytesseract.image_to_string(crop_binary, lang='eng', config='--psm 7')
+                            # Tăng độ phân giải và chuyển sang grayscale để OCR nhạy hơn
+                            gray_img = img.convert('L')
+                            ocr_full = pytesseract.image_to_string(gray_img, lang='vie+eng', config='--psm 6')
                             
-                            if doc_type == "DANH_SACH_TRA_HANG" or "DANH SÁCH TRẢ HÀNG" in full_text.upper():
+                            if "DANH SÁCH TRẢ HÀNG" in ocr_full.upper() or "RETURN" in ocr_full.upper():
                                 doc_type = "DANH_SACH_TRA_HANG"
-                                matches = re.findall(r'\b(7623\d{6})\b', ocr_text)
-                                if not matches:
-                                    matches = re.findall(r'\b(7620\d{6})\b', ocr_text)
-                            else:
-                                matches = re.findall(r'\b(7620\d{6})\b', ocr_text)
-                                if not matches:
-                                    matches = re.findall(r'\b(7623\d{6})\b', ocr_text)
 
-                            if matches:
-                                final_code = matches[0]
+                            matches_full = re.findall(r'\b(7623\d{6}|7620\d{6})\b', ocr_full)
+                            if matches_full:
+                                final_code = matches_full[0]
+                                if final_code.startswith('7623'):
+                                    doc_type = "DANH_SACH_TRA_HANG"
 
                         del page_images, img
                         gc.collect()
@@ -511,7 +503,7 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
                     total_pages = len(reader_temp.pages)
 
                     tasks = [(i, pdf_bytes) for i in range(total_pages)]
-                    max_workers = min(2, os.cpu_count() or 2)
+                    max_workers = 1 # Đảm bảo ổn định bộ nhớ cho DPI 300
 
                     page_results = [None] * total_pages
                     completed_count = 0
@@ -547,7 +539,7 @@ elif option == "2. BSH_OCR & Tách PDF (Excel + Thư mục PDF)":
                 st.session_state.processed_option = "opt2"
                 
                 status_text.text("🎉 Hoàn tất toàn bộ các file!")
-                st.success(f"🎉 Đã OCR thành công! Các file PDF được lưu tại thư mục: `{folder_path}`.")
+                st.success(f"🎉 Đã OCR thành công với DPI 300! Các file PDF được lưu tại thư mục: `{folder_path}`.")
 
             except Exception as ex:
                 st.error(f"❌ Lỗi hệ thống: {str(ex)}")
